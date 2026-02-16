@@ -1,293 +1,158 @@
 # Durable Execution Engine
 
-## Sequence Tracking
-Each step internally increments an AtomicLong counter.
-The step_key is constructed as:
-    stepId + "_" + sequenceNumber
+## Overview
 
-This ensures uniqueness even in loops and conditionals.
+The **Durable Execution Engine** is your safety net for workflows. It allows native Java programs to **survive crashes, power failures, or accidental exits**, and pick up exactly where they left off—without repeating already completed work.
 
-## Thread Safety
-All SQLite operations are synchronized at the method level.
-This prevents SQLITE_BUSY during parallel execution.
+Inspired by robust systems like **Temporal**, **Cadence**, and **Azure Durable Functions**, it’s designed to make your workflows:
 
-## Zombie Step Handling
-We insert a RUNNING record before executing a step.
-If a crash happens before completion:
-- The step is not marked COMPLETED.
-- On restart, it executes again safely.
+* Resilient
+* Deterministic
+* Thread-safe
+* Fully observable through logging
 
-## How to Run
+Whether you’re onboarding employees, provisioning resources, or running iterative batch jobs, this engine makes sure **no step is lost or duplicated**.
 
-Start workflow:
-    java App
+---
 
-Simulate crash after Step 1:
-    java App crash
+## Features
 
-Re-run:
-    java App
+### 1. Workflow Runner
 
-Completed steps will not re-execute.
+* Start or resume workflows seamlessly.
+* Tracks every step in a persistent SQLite database.
 
+### 2. Step Primitive
 
+* Generic step method: `<T> T step(Callable<T> action)`
+* Checkpoints output automatically.
+* Completed steps are skipped on re-runs, ensuring **idempotent execution**.
 
-# Durable Execution Engine – Design Documentation
+### 3. Automatic Sequence ID
 
-## 1. Sequence Tracking & Loop Handling
+* No more manually assigning step IDs.
+* Each step automatically gets a unique sequence number via an `AtomicInteger`.
+* Example:
+
+```java
+String employeeId = ctx.step(() -> createEmployee());
+```
+
+*Even if your workflow loops or repeats steps, the engine ensures uniqueness.*
+
+### 4. Concurrency Support
+
+* Steps can run concurrently with `CompletableFuture`.
+* Writes to SQLite are synchronized to prevent conflicts (`SQLITE_BUSY`).
+
+### 5. Zombie Step Handling
+
+* Steps are marked `RUNNING` before execution.
+* If a crash occurs mid-step, incomplete steps are safely retried on workflow restart.
+* Completed steps are never re-executed.
+
+### 6. Logging
+
+* Uses **SLF4J** for professional logging instead of `System.out.println`.
+* Logs every workflow action, start/end of steps, and errors.
+* Example:
+
+```java
+private static final Logger logger = LoggerFactory.getLogger(EmployeeOnboardingWorkflow.class);
+
+logger.info("Creating employee record...");
+```
+
+### 7. Persistence Layer
+
+* All steps are stored in SQLite with:
+
+| Column      | Description                         |
+| ----------- | ----------------------------------- |
+| workflow_id | Unique identifier of the workflow   |
+| step_key    | Step name + auto-generated sequence |
+| status      | `IN_PROGRESS` or `COMPLETED`        |
+| output      | JSON-serialized result              |
+| updated_at  | Last update timestamp               |
+
+---
+
+## Sequence Tracking & Loop Handling
 
 ### Problem
 
-In durable workflow systems, loops (e.g., retry mechanisms, iterative approvals, polling steps) can cause:
+Loops or iterative steps can cause:
 
 * Re-execution of already completed steps
 * Duplicate side effects
-* Infinite repetition after crash recovery
+* Infinite repetitions after crashes
 
-A durable engine must guarantee **idempotent replay**.
+We need **idempotent replay**.
 
----
+### Solution
 
-### Our Approach
+* Every step is persisted in SQLite.
+* Step keys are unique: `stepName + "_" + sequenceNumber`.
+* Before running a step:
 
-The engine uses **persistent step recording** via SQLite.
+  ```java
+  if (step already completed) {
+      reuse stored output;
+  } else {
+      execute step;
+      persist result;
+  }
+  ```
 
-Each step execution stores a record in the database containing:
+This approach guarantees:
 
-* `workflow_id`
-* `step_id`
-* `status`
-* `output`
-* `timestamp`
-
-This enables deterministic replay.
-
----
-
-### How Loop Handling Works
-
-When a workflow enters a loop:
-
-1. Each iteration is assigned a unique `step_id`
-
-   * Example:
-
-     ```
-     approval_step_1
-     approval_step_2
-     approval_step_3
-     ```
-
-2. Before executing a step, the engine checks:
-
-   ```
-   Does this step already exist in the steps table?
-   ```
-
-3. If the step status is `COMPLETED`:
-
-   * Execution is skipped
-   * Stored output is reused
-
-4. If the step does not exist:
-
-   * It is executed
-   * Result is persisted
-
----
-
-### Why This Works
-
-Because execution is **state-driven**, not instruction-driven.
-
-Even if a loop re-runs after a crash:
-
-* Previously completed iterations are skipped
-* Only incomplete iterations execute
-
-This guarantees:
-
-* Idempotency
 * Crash safety
 * Deterministic replay
-* No duplicate side effects
+* No duplicates
+
+Even loops or retries behave correctly.
 
 ---
 
-## 2. Thread Safety During Parallel Execution
+## Thread Safety During Parallel Execution
 
-### Problem
+### Challenges
 
-Parallel workflows introduce risks:
+Parallel workflows risk:
 
 * Race conditions
 * Dirty reads
 * Lost updates
 * Corrupted state
 
-A durable system must protect shared state and persistence.
+### Safeguards
 
----
+1. **Database-Level Consistency**
 
-### Thread Safety Mechanisms Used
+   * ACID transactions, serialized writes, atomic commits.
 
-#### 1️⃣ Database-Level Consistency (SQLite)
+2. **Connection Isolation**
 
-SQLite provides:
+   * Each workflow uses its own SQLite connection.
 
-* ACID transactions
-* Write locking
-* Serialized writes
+3. **Immutable Step Records**
 
-Each step persistence is executed inside a controlled database operation.
+   * Once created, a `StepRecord` is never modified.
 
-This guarantees:
+4. **Controlled Execution Model**
 
-* Atomic writes
-* No partial updates
-* Crash-safe commits
-
----
-
-#### 2️⃣ Connection Isolation
-
-Each workflow execution uses its own database connection instance.
-
-This prevents:
-
-* Shared mutable connection state
-* Cross-thread interference
-
----
-
-#### 3️⃣ Immutable Step Records
-
-`StepRecord` objects are treated as immutable after creation.
-
-This ensures:
-
-* No concurrent mutation
-* Safe read access across threads
-
----
-
-#### 4️⃣ Controlled Execution Model
-
-The durable context ensures:
-
-* A step is marked `COMPLETED` only after successful execution
-* Parallel threads cannot overwrite completed step states
-* Reads always check persistent state before execution
-
-This makes execution:
-
-* Deterministic
-* Replay-safe
-* Thread-consistent
+   * Steps marked `COMPLETED` only after successful execution.
+   * Reads always check persistent state before execution.
 
 ---
 
 ## Execution Guarantees
-
-The engine provides:
 
 * At-least-once execution
 * Idempotent step replay
 * Crash recovery
 * Consistent persistence
 * Safe parallel execution
-
----
-
-## Summary
-
-Loop handling is achieved using:
-
-* Persistent step tracking
-* Unique step identifiers per iteration
-* Idempotent execution checks
-
-Thread safety is ensured using:
-
-* SQLite transactional guarantees
-* Isolated connections
-* Immutable step records
-* Deterministic replay logic
-
-
-Here’s a **ready-to-use README.md** for your Durable Execution Engine project, updated with **Automatic Sequence ID** and **SLF4J logging** info:
-
----
-
-# Durable Execution Engine
-
-## Overview
-
-The **Durable Execution Engine** allows native Java workflows to become resilient and "durable". Workflows can be interrupted at any point (e.g., program crash, power loss) and, upon restart, resume from the exact point of failure without re-executing completed steps.
-
-Inspired by systems like **Temporal**, **Cadence**, and **Azure Durable Functions**, this engine supports:
-
-* Persistent step results
-* Automatic step retry and sequence management
-* Concurrent execution
-* Thread-safe SQLite database writes
-
----
-
-## Features
-
-1. **Workflow Runner**
-
-   * Starts or resumes a workflow.
-   * Tracks step completion using an internal SQLite database.
-
-2. **Step Primitive**
-
-   * Generic step method: `<T> T step(Callable<T> action)`
-   * Automatically checkpoints output to SQLite.
-   * Completed steps are skipped on rerun.
-
-3. **Automatic Sequence ID**
-
-   * Developers no longer need to provide a manual step ID.
-   * Each step is automatically assigned a unique sequence number via an `AtomicInteger`.
-   * Example:
-
-   ```java
-   String employeeId = ctx.step(() -> createEmployee());
-   ```
-
-4. **Concurrency Support**
-
-   * Steps can run concurrently using `CompletableFuture`.
-   * SQLite writes are synchronized to prevent `SQLITE_BUSY` errors.
-
-5. **Zombie Step Handling**
-
-   * Steps stuck "in-progress" beyond a timeout are retried safely on workflow restart.
-
-6. **Logging**
-
-   * Uses **SLF4J** for logging instead of `System.out.println`.
-   * Logs workflow progress, step start/end, and errors.
-
-   Example:
-
-   ```java
-   private static final Logger logger = LoggerFactory.getLogger(EmployeeOnboardingWorkflow.class);
-
-   logger.info("Creating employee record...");
-   ```
-
-7. **Persistence Layer**
-
-   * SQLite database stores:
-
-     * `workflow_id`
-     * `step_key` (combination of step name and sequence)
-     * `status` (`IN_PROGRESS` or `COMPLETED`)
-     * `output` (JSON-serialized result)
-     * `updated_at` timestamp
 
 ---
 
@@ -302,7 +167,7 @@ durable-engine/
 │  ├─ StepRecord.java
 │  └─ StepStatus.java
 │
-├─ examples/onboarding/    # Sample Employee Onboarding workflow
+├─ examples/onboarding/    # Sample workflow
 │  └─ EmployeeOnboardingWorkflow.java
 │
 ├─ App.java                # CLI entry point
@@ -332,12 +197,14 @@ mvn test
 mvn exec:java
 ```
 
-* The CLI allows you to **simulate a crash** by typing `exit` at any point.
-* Rerun the program, and previously completed steps are **skipped automatically**.
+* Type `exit` during execution to simulate a crash.
+* Re-run the program—completed steps will **never re-execute**.
 
 ---
 
 ## Example: Employee Onboarding Workflow
+
+Steps:
 
 1. Create Employee Record
 2. Provision Laptop & Email (parallel steps)
@@ -349,21 +216,13 @@ EmployeeOnboardingWorkflow workflow = new EmployeeOnboardingWorkflow();
 workflow.run(ctx);
 ```
 
-**Automatic sequence IDs** ensure step uniqueness, even with loops or repeated steps.
-
----
-
-## Concurrency & Thread-Safety
-
-* All database writes are synchronized using `DurableContext`’s internal lock.
-* `CompletableFuture` allows multiple steps to run concurrently without race conditions.
-* `SQLiteStore` uses retry logic to handle `SQLITE_BUSY` errors.
+**Automatic sequence IDs** ensure step uniqueness—even with loops or retries.
 
 ---
 
 ## Logging
 
-SLF4J logging is enabled. Example log output:
+SLF4J logs workflow progress cleanly. Example:
 
 ```
 INFO  [EmployeeOnboardingWorkflow] - Creating employee record...
@@ -378,13 +237,13 @@ INFO  [DurableContext] - Workflow completed successfully
 ## Serialization
 
 * Step results are serialized to JSON using **Jackson**.
-* Ensures any return type can be stored and retrieved safely.
+* Supports storing and retrieving any return type safely.
 
 ---
 
 ## Notes
 
 * Loops, conditionals, and repeated steps are fully supported.
-* Completed steps are **never re-executed**, providing durability.
-* Automatic Sequence IDs remove the need for manual step key management.
+* Completed steps are **never re-executed**, providing full durability.
+* Automatic Sequence IDs remove the need for manual step management.
 
