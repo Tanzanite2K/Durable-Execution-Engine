@@ -1,0 +1,36 @@
+
+---
+
+## **Prompts.txt**
+
+```text
+# AI Prompts Used for Development
+
+1. Durable Execution Engine Architecture
+Prompt:
+"Write a Java-based durable workflow engine that persists steps to SQLite and resumes from the last completed step after a crash. Include generic step support and concurrent step execution using CompletableFuture."
+
+2. Step Primitive Implementation
+Prompt:
+"Create a Java <T> T step(String id, Callable<T> fn) method that checks SQLite for previous execution, returns cached results if present, otherwise executes the function and persists output."
+
+3. SQLite Thread Safety
+Prompt:
+"Implement a thread-safe SQLiteStore class in Java that handles concurrent writes using synchronized blocks and retries when SQLITE_BUSY occurs."
+
+4. Employee Onboarding Workflow Example
+Prompt:
+"Write a sample Java workflow 'EmployeeOnboardingWorkflow' with 4 steps: create employee, assign laptop, provision system access, schedule orientation. Make steps 2 & 3 parallel, others sequential, using DurableContext.step."
+
+5. Crash Simulation CLI
+Prompt:
+"Write a Java CLI 'App.java' that runs the EmployeeOnboardingWorkflow, allows the user to type 'exit' to simulate a crash, and resumes workflow on next execution."
+
+6. Unit Tests
+Prompt:
+"Write JUnit tests to verify DurableContext and SQLiteStore behavior, ensuring steps persist correctly and database initializes without errors."
+
+7. Bonus Features
+Prompt:
+"Suggest improvements: auto-generate step IDs using AtomicInteger, implement logging with SLF4J, and handle zombie steps with timeout."
+
