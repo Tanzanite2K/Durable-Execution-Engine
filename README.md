@@ -240,6 +240,10 @@ INFO  [DurableContext] - Workflow completed successfully
 * Supports storing and retrieving any return type safely.
 
 ---
+## sequence diagram
+
+<img width="1092" height="2246" alt="image" src="https://github.com/user-attachments/assets/167c4dd6-5083-4213-8e8f-d36dd955e29d" />
+
 
 ## Notes
 
